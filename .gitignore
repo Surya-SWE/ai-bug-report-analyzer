@@ -1,0 +1,29 @@
+# Android/IntelliJ/Gradle ignores
+.gradle/
+.idea/
+local.properties
+*.iml
+build/
+app/build/
+*.apk
+*.ap_ 
+*.aab
+*.log
+*.keystore
+captures/
+output.json
+# OS generated
+.DS_Store
+Thumbs.db
+# Crashlytics/Firebase
+crashlytics-build.properties
+fabric.properties
+# Misc
+*.swp
+*.swo
+# Ignore generated files
+app/src/main/res/raw/
+# Ignore test results
+*.xml
+# Ignore user-specific config
+*.jks 
