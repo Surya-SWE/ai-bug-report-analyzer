@@ -18,6 +18,9 @@ import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import javax.inject.Inject
+import com.surya.bugreportanalyzer.data.model.ANRReport
+import java.io.File
+import java.util.UUID
 
 @HiltViewModel
 class BugReportViewModel @Inject constructor(
@@ -159,6 +162,48 @@ class BugReportViewModel @Inject constructor(
     fun reset() {
         _uiState.value = BugReportUiState()
     }
+
+    fun processAnrZipFile(context: Context, zipUri: Uri) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                isProcessingFile = true,
+                processingMessage = "Extracting ANR files...",
+                isLoading = false,
+                error = null
+            )
+            try {
+                val cacheDir = File(context.cacheDir, "anr_zip_${UUID.randomUUID()}")
+                cacheDir.mkdirs()
+                val rootDir = withContext(Dispatchers.IO) {
+                    com.surya.bugreportanalyzer.data.parser.BugReportParser.unzipFile(context, zipUri, cacheDir)
+                }
+                val anrFiles = withContext(Dispatchers.IO) {
+                    com.surya.bugreportanalyzer.data.parser.BugReportParser.listAnrFiles(rootDir)
+                }
+                val anrReports = anrFiles.map { file ->
+                    parser.parseAnrFile(file)
+                }
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    isProcessingFile = false,
+                    processingMessage = "",
+                    anrReports = anrReports,
+                    error = null
+                )
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    isProcessingFile = false,
+                    processingMessage = "",
+                    error = e.message ?: "Failed to process ANR zip file"
+                )
+            }
+        }
+    }
+
+    fun selectAnr(anr: ANRReport) {
+        _uiState.value = _uiState.value.copy(selectedAnr = anr)
+    }
 }
 
 data class BugReportUiState(
@@ -167,5 +212,7 @@ data class BugReportUiState(
     val processingMessage: String = "",
     val bugReportFile: BugReportFile? = null,
     val selectedCrash: CrashReport? = null,
+    val anrReports: List<ANRReport> = emptyList(),
+    val selectedAnr: ANRReport? = null,
     val error: String? = null
 ) 

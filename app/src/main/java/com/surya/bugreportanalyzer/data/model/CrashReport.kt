@@ -37,4 +37,16 @@ data class BugReportFile(
     val fileSize: Long,
     val content: String,
     val crashes: List<CrashReport> = emptyList()
+)
+
+data class ANRReport(
+    val id: String = "",
+    val fileName: String = "",
+    val subject: String = "",
+    val exception: String = "",
+    val timestamp: String = "",
+    val processName: String = "",
+    val pid: String = "",
+    val summary: String = "",
+    val fullTrace: String = ""
 ) 

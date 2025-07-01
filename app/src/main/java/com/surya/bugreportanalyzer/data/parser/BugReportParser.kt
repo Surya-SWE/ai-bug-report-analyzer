@@ -8,6 +8,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import java.util.regex.Pattern
 import java.io.BufferedReader
+import java.util.zip.ZipInputStream
+import java.io.File
+import java.io.FileOutputStream
+import android.content.Context
+import android.net.Uri
 
 @Singleton
 class BugReportParser @Inject constructor() {
@@ -189,5 +194,78 @@ class BugReportParser @Inject constructor() {
     private fun generateStableId(content: String): String {
         val hash = content.hashCode().toString().replace("-", "abs")
         return "crash_$hash"
+    }
+
+    fun parseAnrFile(file: File): ANRReport {
+        val lines = file.readLines()
+        val fullTrace = lines.joinToString("\n")
+        var subject = ""
+        var exception = ""
+        var timestamp = ""
+        var processName = ""
+        var pid = ""
+        var summary = ""
+        // Simple extraction logic
+        for (line in lines) {
+            when {
+                line.startsWith("Subject:") -> subject = line.removePrefix("Subject:").trim()
+                line.startsWith("Exception") -> exception = line.substringAfter(":").trim()
+                line.startsWith("TimeStamp") -> timestamp = line.substringAfter(":").trim()
+                line.startsWith("ProcessName") -> processName = line.substringAfter(":").trim()
+                line.startsWith("Pid") -> pid = line.substringAfter(":").trim()
+                line.startsWith("Summary") -> summary = line.substringAfter(":").trim()
+            }
+        }
+        // If summary is empty, use the first 10 lines as a fallback
+        if (summary.isEmpty()) summary = lines.take(10).joinToString("\n")
+        return ANRReport(
+            id = file.nameWithoutExtension + "_" + file.hashCode(),
+            fileName = file.name,
+            subject = subject,
+            exception = exception,
+            timestamp = timestamp,
+            processName = processName,
+            pid = pid,
+            summary = summary,
+            fullTrace = fullTrace
+        )
+    }
+
+    companion object {
+        /**
+         * Unzips the given zip Uri to the target directory.
+         * Returns the root extraction directory.
+         */
+        fun unzipFile(context: Context, zipUri: Uri, targetDir: File): File {
+            context.contentResolver.openInputStream(zipUri)?.use { inputStream ->
+                ZipInputStream(inputStream).use { zis ->
+                    var entry = zis.nextEntry
+                    while (entry != null) {
+                        val file = File(targetDir, entry.name)
+                        if (entry.isDirectory) {
+                            file.mkdirs()
+                        } else {
+                            file.parentFile?.mkdirs()
+                            FileOutputStream(file).use { fos ->
+                                zis.copyTo(fos)
+                            }
+                        }
+                        zis.closeEntry()
+                        entry = zis.nextEntry
+                    }
+                }
+            }
+            return targetDir
+        }
+
+        /**
+         * Lists all ANR files in FS/data/anr under the given root directory.
+         */
+        fun listAnrFiles(rootDir: File): List<File> {
+            val anrDir = File(rootDir, "FS/data/anr")
+            return if (anrDir.exists() && anrDir.isDirectory) {
+                anrDir.listFiles()?.filter { it.isFile } ?: emptyList()
+            } else emptyList()
+        }
     }
 } 

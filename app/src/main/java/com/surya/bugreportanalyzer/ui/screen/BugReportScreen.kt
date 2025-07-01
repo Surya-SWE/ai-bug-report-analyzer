@@ -74,6 +74,20 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import android.content.Intent
 import androidx.compose.ui.res.painterResource
 import com.surya.bugreportanalyzer.R
+import com.surya.bugreportanalyzer.ui.components.ANRCard
+import com.surya.bugreportanalyzer.data.model.ANRReport
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.ClipboardManager
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.window.Dialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,6 +101,7 @@ fun BugReportScreen(
     var showLargeFileWarning by remember { mutableStateOf(false) }
     var largeFileName by remember { mutableStateOf("") }
     var selectedSeverity by remember { mutableStateOf<CrashSeverity?>(null) }
+    var selectedTab by remember { mutableStateOf(0) } // 0 = Crashes, 1 = ANR
     
     // LazyListState for scrolling to top
     val lazyListState = rememberLazyListState()
@@ -117,6 +132,12 @@ fun BugReportScreen(
     }
 
     val scrollState = rememberScrollState()
+
+    val anrZipLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.processAnrZipFile(context, it) }
+    }
 
     Scaffold(
         topBar = {
@@ -167,360 +188,611 @@ fun BugReportScreen(
                 .padding(paddingValues)
                 .verticalScroll(scrollState)
         ) {
-            // File Upload Section
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.1f)
-                ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+            // Tab Row for Crashes/ANR
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp, horizontal = 16.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                SegmentedButton(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    shape = RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = MaterialTheme.colorScheme.primary,
+                        activeContentColor = Color.White,
+                        inactiveContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(80.dp)
-                            .background(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-                                shape = androidx.compose.foundation.shape.CircleShape
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Upload,
-                            contentDescription = "Upload",
-                            modifier = Modifier.size(40.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Upload Bug Report File",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Select a .txt file containing crash logs",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Recommended: Files under 10MB for best performance",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(20.dp))
-                    Button(
-                        onClick = { fileLauncher.launch("text/*") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !uiState.isProcessingFile,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
-                        ),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
-                    ) {
-                        Icon(Icons.Default.FileOpen, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Select File", fontWeight = FontWeight.Medium)
-                    }
+                    Text("Crashes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                SegmentedButton(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    shape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
+                    colors = SegmentedButtonDefaults.colors(
+                        activeContainerColor = Color(0xFF2196F3),
+                        activeContentColor = Color.White,
+                        inactiveContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("ANR", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Loading State
-            if (uiState.isLoading) {
+            Spacer(modifier = Modifier.height(8.dp))
+            if (selectedTab == 0) {
+                // File Upload Section (modernized)
                 Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Text("Analyzing bug report...")
-                    }
-                }
-            }
-
-            // File Processing State
-            if (uiState.isProcessingFile) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp)
+                        .background(Color.Transparent),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    )
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.08f)
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
                 ) {
                     Column(
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier
+                            .padding(24.dp)
+                            .fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Text(
-                                text = "Processing File",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = uiState.processingMessage,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        LinearProgressIndicator(
-                            modifier = Modifier.fillMaxWidth(),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
-
-            // Error State
-            uiState.error?.let { error ->
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Error,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = error,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
-                }
-            }
-
-            // Results Section
-            uiState.bugReportFile?.let { bugReport ->
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                // Wrap file info, filter chips, and crash list in a Column
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // File Info
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
-                        ),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(20.dp)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Analytics,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.secondary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(
-                                    text = "File Analysis",
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column {
-                                    Text(
-                                        text = "Size",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "${bugReport.fileSize} characters",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(
-                                        text = "Crashes",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "${bugReport.crashes.size}",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        color = if (bugReport.crashes.isNotEmpty()) Color.Red else MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Crashes List
-                    if (bugReport.crashes.isNotEmpty()) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
+                        Box(
+                            modifier = Modifier
+                                .size(90.dp)
+                                .background(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                                    shape = CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Warning,
-                                contentDescription = null,
-                                tint = Color.Red,
-                                modifier = Modifier.size(28.dp)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = "Crashes Detected",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Red
+                                imageVector = Icons.Default.Upload,
+                                contentDescription = "Upload Bug Report",
+                                modifier = Modifier.size(48.dp),
+                                tint = MaterialTheme.colorScheme.primary
                             )
                         }
                         Spacer(modifier = Modifier.height(16.dp))
-                        
-                        // Check if there are multiple different severities
-                        val uniqueSeverities = bugReport.crashes.map { it.severity }.distinct()
-                        val showSeverityFilter = uniqueSeverities.size > 1
-                        
-                        // Severity Filter Chips (only show if there are multiple severities)
-                        if (showSeverityFilter) {
-                            Column {
-                                Text(
-                                    text = "Filter by Severity",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                        Text(
+                            text = "Bug Report Uploader",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Upload a .txt file containing crash logs. Only .txt files are accepted.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Tip: For better experience, .txt file should be <10MB.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Button(
+                            onClick = { fileLauncher.launch("text/*") },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !uiState.isProcessingFile,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            ),
+                            elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+                        ) {
+                            Icon(Icons.Default.FileOpen, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Select File", fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Loading State
+                if (uiState.isLoading) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Text("Analyzing bug report...")
+                        }
+                    }
+                }
+
+                // File Processing State
+                if (uiState.isProcessingFile) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = MaterialTheme.colorScheme.primary
                                 )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    FilterChip(
-                                        selected = selectedSeverity == null,
-                                        onClick = { selectedSeverity = null },
-                                        label = { 
-                                            Text("ALL", fontWeight = FontWeight.Medium) 
-                                        },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                            selectedLabelColor = Color.White
-                                        )
-                                    )
-                                    FilterChip(
-                                        selected = selectedSeverity == CrashSeverity.HIGH,
-                                        onClick = { selectedSeverity = CrashSeverity.HIGH },
-                                        label = { 
-                                            Text("HIGH", fontWeight = FontWeight.Medium) 
-                                        },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = Color.Red,
-                                            selectedLabelColor = Color.White
-                                        )
-                                    )
-                                    FilterChip(
-                                        selected = selectedSeverity == CrashSeverity.MEDIUM,
-                                        onClick = { selectedSeverity = CrashSeverity.MEDIUM },
-                                        label = { 
-                                            Text("MEDIUM", fontWeight = FontWeight.Medium) 
-                                        },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = Color(0xFF2196F3),
-                                            selectedLabelColor = Color.White
-                                        )
-                                    )
-                                    FilterChip(
-                                        selected = selectedSeverity == CrashSeverity.LOW,
-                                        onClick = { selectedSeverity = CrashSeverity.LOW },
-                                        label = { 
-                                            Text("LOW", fontWeight = FontWeight.Medium) 
-                                        },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = Color(0xFF4CAF50),
-                                            selectedLabelColor = Color.White
-                                        )
-                                    )
-                                }
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Text(
+                                    text = "Processing File",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                             Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        
-                        // Filter crashes based on selected filters
-                        val filteredCrashes = bugReport.crashes.filter {
-                            selectedSeverity == null || it.severity == selectedSeverity
-                        }
-                        
-                        // Show filtered count
-                        if (selectedSeverity != null) {
                             Text(
-                                text = "Showing ${filteredCrashes.size} of ${bugReport.crashes.size} crashes",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = uiState.processingMessage,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        
-                        filteredCrashes.forEach { crash ->
-                            CrashCard(
-                                crash = crash,
-                                onClick = { 
-                                    val route = Screen.CrashBlock.route + "/${crash.id}"
-                                    navController.navigate(route)
-                                }
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.primary
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
                         }
-                    } else {
+                    }
+                }
+
+                // Error State
+                uiState.error?.let { error ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Error,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = error,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+
+                // Results Section
+                uiState.bugReportFile?.let { bugReport ->
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    // Wrap file info, filter chips, and crash list in a Column
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // File Info
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                         ) {
+                            Column(
+                                modifier = Modifier.padding(20.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Analytics,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.secondary,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        text = "File Analysis",
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = "Size",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = "${bugReport.fileSize} characters",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = "Crashes",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = "${bugReport.crashes.size}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = if (bugReport.crashes.isNotEmpty()) Color.Red else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Crashes List
+                        if (bugReport.crashes.isNotEmpty()) {
                             Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(
-                                    Icons.Default.CheckCircle,
+                                    imageVector = Icons.Default.Warning,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
+                                    tint = Color.Red,
+                                    modifier = Modifier.size(28.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("No crashes detected in this file")
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = "Crashes Detected",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.Red
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                            
+                            // Check if there are multiple different severities
+                            val uniqueSeverities = bugReport.crashes.map { it.severity }.distinct()
+                            val showSeverityFilter = uniqueSeverities.size > 1
+                            
+                            // Severity Filter Chips (only show if there are multiple severities)
+                            if (showSeverityFilter) {
+                                Column {
+                                    Text(
+                                        text = "Filter by Severity",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        FilterChip(
+                                            selected = selectedSeverity == null,
+                                            onClick = { selectedSeverity = null },
+                                            label = { 
+                                                Text("ALL", fontWeight = FontWeight.Medium) 
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                                selectedLabelColor = Color.White
+                                            )
+                                        )
+                                        FilterChip(
+                                            selected = selectedSeverity == CrashSeverity.HIGH,
+                                            onClick = { selectedSeverity = CrashSeverity.HIGH },
+                                            label = { 
+                                                Text("HIGH", fontWeight = FontWeight.Medium) 
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = Color.Red,
+                                                selectedLabelColor = Color.White
+                                            )
+                                        )
+                                        FilterChip(
+                                            selected = selectedSeverity == CrashSeverity.MEDIUM,
+                                            onClick = { selectedSeverity = CrashSeverity.MEDIUM },
+                                            label = { 
+                                                Text("MEDIUM", fontWeight = FontWeight.Medium) 
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = Color(0xFF2196F3),
+                                                selectedLabelColor = Color.White
+                                            )
+                                        )
+                                        FilterChip(
+                                            selected = selectedSeverity == CrashSeverity.LOW,
+                                            onClick = { selectedSeverity = CrashSeverity.LOW },
+                                            label = { 
+                                                Text("LOW", fontWeight = FontWeight.Medium) 
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = Color(0xFF4CAF50),
+                                                selectedLabelColor = Color.White
+                                            )
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                            
+                            // Filter crashes based on selected filters
+                            val filteredCrashes = bugReport.crashes.filter {
+                                selectedSeverity == null || it.severity == selectedSeverity
+                            }
+                            
+                            // Show filtered count
+                            if (selectedSeverity != null) {
+                                Text(
+                                    text = "Showing ${filteredCrashes.size} of ${bugReport.crashes.size} crashes",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                            
+                            filteredCrashes.forEach { crash ->
+                                CrashCard(
+                                    crash = crash,
+                                    onClick = { 
+                                        val route = Screen.CrashBlock.route + "/${crash.id}"
+                                        navController.navigate(route)
+                                    }
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                        } else {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("No crashes detected in this file")
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // ANR UI
+                val clipboardManager = LocalClipboardManager.current
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp)
+                        .background(Color.Transparent),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.08f)
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(2.dp, Color(0xFF2196F3))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(24.dp)
+                            .fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(90.dp)
+                                .background(
+                                    Color(0xFF2196F3).copy(alpha = 0.08f),
+                                    shape = CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Upload,
+                                contentDescription = "Upload",
+                                modifier = Modifier.size(40.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Upload ANR .zip File",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Select a .zip file containing ANR traces (FS/data/anr)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(20.dp))
+                        Button(
+                            onClick = { anrZipLauncher.launch("application/zip") },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !uiState.isProcessingFile,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            ),
+                            elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+                        ) {
+                            Icon(Icons.Default.FileOpen, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Select .zip File", fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                // ANR Loading State
+                if (uiState.isProcessingFile) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Text(
+                                    text = "Processing ANR Zip",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = uiState.processingMessage,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+                // ANR List
+                if (uiState.anrReports.isNotEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color.Red,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "ANR's Detected",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Red
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "(${uiState.anrReports.size})",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Red
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    var selectedAnr by remember { mutableStateOf<ANRReport?>(null) }
+                    var showFullTrace by remember { mutableStateOf(false) }
+                    uiState.anrReports.forEach { anr ->
+                        ANRCard(anr = anr, onClick = { selectedAnr = anr })
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    // ANR Detail Dialog (Preview)
+                    if (selectedAnr != null && !showFullTrace) {
+                        val previewLines = selectedAnr!!.fullTrace.lines().take(100)
+                        AlertDialog(
+                            onDismissRequest = { selectedAnr = null },
+                            title = { Text("ANR Trace Preview") },
+                            text = {
+                                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                                    Text(
+                                        text = previewLines.joinToString("\n"),
+                                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (selectedAnr!!.fullTrace.lines().size > 100) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("... (truncated)", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                Row {
+                                    TextButton(onClick = { showFullTrace = true }) { Text("View Full Trace") }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    TextButton(onClick = { selectedAnr = null }) { Text("Close") }
+                                }
+                            }
+                        )
+                    }
+                    // Full-Screen Dialog for Full Trace
+                    if (selectedAnr != null && showFullTrace) {
+                        Dialog(onDismissRequest = { showFullTrace = false; selectedAnr = null }) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                tonalElevation = 8.dp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(0.95f)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("ANR Full Trace", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                        Spacer(modifier = Modifier.weight(1f))
+                                        IconButton(onClick = { showFullTrace = false; selectedAnr = null }) {
+                                            Icon(Icons.Default.Close, contentDescription = "Close")
+                                        }
+                                    }
+                                    Text("File: ${selectedAnr!!.fileName}", style = MaterialTheme.typography.bodySmall)
+                                    Text("Process: ${selectedAnr!!.processName} (PID: ${selectedAnr!!.pid})", style = MaterialTheme.typography.bodySmall)
+                                    Text("Time: ${selectedAnr!!.timestamp}", style = MaterialTheme.typography.bodySmall)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Divider()
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        val lines = selectedAnr?.fullTrace?.lines() ?: emptyList()
+                                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                            itemsIndexed(lines) { idx, line ->
+                                                Text(
+                                                    text = line ?: "",
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
